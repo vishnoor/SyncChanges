@@ -33,7 +33,7 @@ namespace SyncChanges
         /// <value>
         /// The database connection timeout.
         /// </value>
-        public int Timeout { get; set; } = 0;
+        public int Timeout { get; set; } = 180;
 
         /// <summary>
         /// Gets or sets the minimum synchronization time interval in seconds. Default is 30 seconds.
@@ -79,6 +79,11 @@ namespace SyncChanges
             Log.Info($"Getting replication information for replication set {replicationSet.Name}");
 
             var tables = GetTables(replicationSet.Source);
+            //Filter out ExcludeTables from here
+            tables = tables.Select(t => new { Table = t, Name = t.Name.Replace("[", "").Replace("]", "") })
+                            .Where(t => !replicationSet.ExcludeTables.Exists(r => r == t.Name || r == t.Name.Split('.')[1]))
+                            .Select(t => t.Table).ToList();
+
             if (replicationSet.Tables != null && replicationSet.Tables.Any())
                 tables = tables.Select(t => new { Table = t, Name = t.Name.Replace("[", "").Replace("]", "") })
                     .Where(t => replicationSet.Tables.Exists(r => r == t.Name || r == t.Name.Split('.')[1]))
@@ -307,7 +312,8 @@ namespace SyncChanges
         {
             var db = new Database(connectionString, databaseType ?? DatabaseType.SqlServer2005, Microsoft.Data.SqlClient.SqlClientFactory.Instance);
 
-            if (Timeout != 0) db.CommandTimeout = Timeout;
+            //if (Timeout != 0) db.CommandTimeout = Timeout;
+            db.CommandTimeout = 300; //5 Mins
 
             return db;
         }
@@ -337,6 +343,7 @@ namespace SyncChanges
                             var change = changes[i];
                             Log.Debug($"Replicating change #{i + 1} of {changes.Count} (Version {change.Version}, CreationVersion {change.CreationVersion})");
 
+                            /*
                             foreach (var fk in change.ForeignKeyConstraintsToDisable)
                             {
                                 if (disabledForeignKeyConstraints.TryGetValue(fk.Key, out long untilVersion))
@@ -351,9 +358,11 @@ namespace SyncChanges
                                     disabledForeignKeyConstraints[fk.Key] = fk.Value;
                                 }
                             }
+                            */
 
                             PerformChange(db, change);
 
+                            /*
                             if ((i + 1) >= changes.Count || changes[i + 1].CreationVersion > change.CreationVersion) // there may be more than one change with the same CreationVersion
                             {
                                 foreach (var fk in disabledForeignKeyConstraints.Where(f => f.Value <= change.CreationVersion).Select(f => f.Key).ToList())
@@ -362,6 +371,7 @@ namespace SyncChanges
                                     disabledForeignKeyConstraints.Remove(fk);
                                 }
                             }
+                            */
                         }
 
                         if (!DryRun)
@@ -457,7 +467,7 @@ namespace SyncChanges
                     var sql = $@"select c.SYS_CHANGE_OPERATION, c.SYS_CHANGE_VERSION, c.SYS_CHANGE_CREATION_VERSION,
                         {string.Join(", ", table.KeyColumns.Select(c => "c." + c).Concat(table.OtherColumns.Select(c => "t." + c)))}
                         from CHANGETABLE (CHANGES {tableName}, @0) c
-                        left outer join {tableName} t on ";
+                        left outer join {tableName} t with (nolock) on ";
                     sql += string.Join(" and ", table.KeyColumns.Select(k => $"c.{k} = t.{k}"));
                     sql += " order by coalesce(c.SYS_CHANGE_CREATION_VERSION, c.SYS_CHANGE_VERSION), c.SYS_CHANGE_OPERATION";
 
@@ -466,6 +476,9 @@ namespace SyncChanges
                     db.OpenSharedConnection();
                     var cmd = db.CreateCommand(db.Connection, System.Data.CommandType.Text, sql, destinationVersion);
 
+                    //Log.Debug($"Command Timeout is {db.CommandTimeout}");
+
+                    cmd.CommandTimeout = db.CommandTimeout;
                     using var reader = cmd.ExecuteReader();
                     var numChanges = 0;
 
@@ -517,7 +530,7 @@ namespace SyncChanges
 
             changeInfo.Changes.AddRange(changes.OrderBy(c => c.Version).ThenBy(c => c.Table.Name));
 
-            ComputeForeignKeyConstraintsToDisable(changeInfo);
+            //ComputeForeignKeyConstraintsToDisable(changeInfo);
 
             return changeInfo;
         }
@@ -582,37 +595,58 @@ namespace SyncChanges
             {
                 // Insert
                 case 'I':
-                    var insertColumnNames = change.GetColumnNames();
-                    var insertSql = string.Format("insert into {0} ({1}) values ({2})", tableName,
-                        string.Join(", ", insertColumnNames),
-                        string.Join(", ", Parameters(insertColumnNames.Count)));
-                    var insertValues = change.GetValues();
-                    if (table.HasIdentity)
-                        insertSql = $"set IDENTITY_INSERT {tableName} ON; {insertSql}; set IDENTITY_INSERT {tableName} OFF";
-                    Log.Debug($"Executing insert: {insertSql} ({FormatArgs(insertValues)})");
-                    if (!DryRun)
-                        db.Execute(insertSql, insertValues);
+                    try
+                    {
+                        var insertColumnNames = change.GetColumnNames();
+                        var insertSql = string.Format("insert into {0} ({1}) values ({2})", tableName,
+                            string.Join(", ", insertColumnNames),
+                            string.Join(", ", Parameters(insertColumnNames.Count)));
+                        var insertValues = change.GetValues();
+                        if (table.HasIdentity)
+                            insertSql = $"set IDENTITY_INSERT {tableName} ON; {insertSql}; set IDENTITY_INSERT {tableName} OFF";
+                        Log.Debug($"Executing insert: {insertSql} ({FormatArgs(insertValues)})");
+                        if (!DryRun)
+                            db.Execute(insertSql, insertValues);
+                    }
+                    catch(Exception ex)
+                    {
+                        Log.Warn($"Erro Executing insert: {ex} ");
+                    }
                     break;
 
                 // Update
                 case 'U':
-                    var updateColumnNames = change.Others.Keys.ToList();
-                    var updateSql = string.Format("update {0} set {1} where {2}", tableName,
-                        string.Join(", ", updateColumnNames.Select((c, i) => $"{c} = @{i + change.Keys.Count}")),
-                        PrimaryKeys(change));
-                    var updateValues = change.GetValues();
-                    Log.Debug($"Executing update: {updateSql} ({FormatArgs(updateValues)})");
-                    if (!DryRun)
-                        db.Execute(updateSql, updateValues);
+                    try
+                    {
+                        var updateColumnNames = change.Others.Keys.ToList();
+                        var updateSql = string.Format("update {0} set {1} where {2}", tableName,
+                            string.Join(", ", updateColumnNames.Select((c, i) => $"{c} = @{i + change.Keys.Count}")),
+                            PrimaryKeys(change));
+                        var updateValues = change.GetValues();
+                        Log.Debug($"Executing update: {updateSql} ({FormatArgs(updateValues)})");
+                        if (!DryRun)
+                            db.Execute(updateSql, updateValues);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn($"Erro Executing update: {ex} ");
+                    }
                     break;
 
                 // Delete
                 case 'D':
-                    var deleteSql = string.Format("delete from {0} where {1}", tableName, PrimaryKeys(change));
-                    var deleteValues = change.Keys.Values.ToArray();
-                    Log.Debug($"Executing delete: {deleteSql} ({FormatArgs(deleteValues)})");
-                    if (!DryRun)
-                        db.Execute(deleteSql, deleteValues);
+                    try
+                    {
+                        var deleteSql = string.Format("delete from {0} where {1}", tableName, PrimaryKeys(change));
+                        var deleteValues = change.Keys.Values.ToArray();
+                        Log.Debug($"Executing delete: {deleteSql} ({FormatArgs(deleteValues)})");
+                        if (!DryRun)
+                            db.Execute(deleteSql, deleteValues);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn($"Erro Executing delete: {ex} ");
+                    }
                     break;
             }
         }

@@ -8,12 +8,17 @@
       },
       "Destinations": [
         {
+          "Name": "PREPROD-REPLICA-66",
+          "ConnectionString": "Data Source=10.10.98.66;Initial Catalog=NitaraDB;user=sa;password=Gt(#@987HaS;MultipleActiveResultSets=True;TrustServerCertificate=True"
+        }
+        ,
+        {
           "Name": "PREPROD-REPLICA-76",
           "ConnectionString": "Data Source=10.10.98.76;Initial Catalog=NitaraDB;user=sa;password=Gt(#@987RTGF;MultipleActiveResultSets=True;TrustServerCertificate=True"
         }
       ],
       "Tables": [],
-      "ExcludeTables" :  ["Cattles"]
+      "ExcludeTables": [ "Cattles" ]
     }
   ]
 }

@@ -56,6 +56,14 @@ namespace SyncChanges
         /// The tables to be replicated.
         /// </value>
         public List<string> Tables { get; set; } = [];
+
+        /// <summary>
+        /// Gets or sets the names of the tables to be excluded from replication
+        /// </summary>
+        /// <value>
+        /// The tables to be excuded
+        /// </value>
+        public List<string> ExcludeTables { get; set; } = [];
     }
 
     /// <summary>
