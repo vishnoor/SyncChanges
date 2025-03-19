@@ -1,0 +1,25 @@
+{
+  "ReplicationSets": [
+    {
+      "Name": "UAT_SYNC",
+      "Source": {
+        "Name": "UAT",
+        "ConnectionString": "Data Source=10.10.98.26,31812;Initial Catalog=NitaraDB;user=admin;password=uthaP!88]vjR;MultipleActiveResultSets=True;TrustServerCertificate=True;"
+      },
+      "Destinations": [
+        {
+          "Name": "UAT-REPLICA",
+          "ConnectionString": "Server=.\\SQLEXPRESS; Database=NitaraDB; Integrated Security=True;TrustServerCertificate=True;"
+        }
+      ],
+      "Tables": [],
+      "ExcludeTables": [ "Cattles" ],
+      "KafkaEndpoints" : [
+        {
+          "Broker" : "10.10.98.39:9092",
+          "Topic" : "dev_sync_changes"
+        }
+      ]
+    }
+  ]
+}

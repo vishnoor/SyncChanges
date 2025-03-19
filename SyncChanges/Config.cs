@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-
 namespace SyncChanges
 {
     /// <summary>
@@ -11,80 +10,45 @@ namespace SyncChanges
     /// </summary>
     public class Config
     {
-        /// <summary>
-        /// Gets the replication sets.
-        /// </summary>
-        /// <value>
-        /// The replication sets.
-        /// </value>
         public List<ReplicationSet> ReplicationSets { get; private set; } = [];
     }
-
     /// <summary>
     /// Represents a replication sets, i.e. the combination of a source database and one or more destination databases.
     /// </summary>
     public class ReplicationSet
     {
-        /// <summary>
-        /// Gets or sets the name of the replication set. This is just for identification in logs etc.
-        /// </summary>
-        /// <value>
-        /// The name of the replication set.
-        /// </value>
         public string Name { get; set; }
-
-        /// <summary>
-        /// Gets or sets the source database.
-        /// </summary>
-        /// <value>
-        /// The source database.
-        /// </value>
         public DatabaseInfo Source { get; set; }
-
-        /// <summary>
-        /// Gets the destination databases.
-        /// </summary>
-        /// <value>
-        /// The destination databases.
-        /// </value>
         public List<DatabaseInfo> Destinations { get; private set; } = [];
-
-        /// <summary>
-        /// Gets or sets the names of the tables to be replicated. If this is empty, all (non-system) tables will be replicated.
-        /// </summary>
-        /// <value>
-        /// The tables to be replicated.
-        /// </value>
         public List<string> Tables { get; set; } = [];
-
-        /// <summary>
-        /// Gets or sets the names of the tables to be excluded from replication
-        /// </summary>
-        /// <value>
-        /// The tables to be excuded
-        /// </value>
         public List<string> ExcludeTables { get; set; } = [];
+        /// <summary>
+        /// Gets or sets the Kafka endpoints configuration
+        /// </summary>
+        public List<KafkaEndpoint> KafkaEndpoints { get; set; } = [];
     }
-
     /// <summary>
     /// Represents information about a database.
     /// </summary>
     public class DatabaseInfo
     {
-        /// <summary>
-        /// Gets or sets the name of the database. Used solely for identification in logs etc.
-        /// </summary>
-        /// <value>
-        /// The name of the database.
-        /// </value>
         public string Name { get; set; }
+        public string ConnectionString { get; set; }
+    }
+
+    /// <summary>
+    /// Represents Kafka endpoint configuration
+    /// </summary>
+    public class KafkaEndpoint
+    {
+        /// <summary>
+        /// Gets or sets the Kafka broker address
+        /// </summary>
+        public string Broker { get; set; }
 
         /// <summary>
-        /// Gets or sets the connection string.
+        /// Gets or sets the Kafka topic name
         /// </summary>
-        /// <value>
-        /// The connection string.
-        /// </value>
-        public string ConnectionString { get; set; }
+        public string Topic { get; set; }
     }
 }

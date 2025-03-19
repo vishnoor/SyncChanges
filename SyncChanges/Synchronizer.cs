@@ -5,7 +5,13 @@ using System;
 using System.Collections.Generic;
 using System.Data.Common;
 using System.Linq;
+using System.Text.Json.Serialization;
 using System.Threading;
+using System.Xml;
+using System.Xml.Schema;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using System.Threading.Tasks;
 
 namespace SyncChanges
 {
@@ -55,6 +61,9 @@ namespace SyncChanges
         private IList<IList<TableInfo>> Tables { get; } = [];
         private readonly bool[] InitializedReplicationSets = new bool[config.ReplicationSets.Count];
 
+        private KafkaProducer kafkaProducer;
+        private string kafkaTopic = "";
+
         /// <summary>
         /// Initialize the synchronization process.
         /// </summary>
@@ -75,6 +84,10 @@ namespace SyncChanges
                 return;
 
             var replicationSet = Config.ReplicationSets[index];
+
+            //Setup Kafka
+            this.kafkaProducer = new KafkaProducer(replicationSet.KafkaEndpoints[0].Broker);
+            this.kafkaTopic = replicationSet.KafkaEndpoints[0].Topic;
 
             Log.Info($"Getting replication information for replication set {replicationSet.Name}");
 
@@ -585,7 +598,7 @@ namespace SyncChanges
             }
         }
 
-        private void PerformChange(Database db, Change change)
+        private async Task PerformChange(Database db, Change change)
         {
             var table = change.Table;
             var tableName = table.Name;
@@ -606,9 +619,21 @@ namespace SyncChanges
                             insertSql = $"set IDENTITY_INSERT {tableName} ON; {insertSql}; set IDENTITY_INSERT {tableName} OFF";
                         Log.Debug($"Executing insert: {insertSql} ({FormatArgs(insertValues)})");
                         if (!DryRun)
-                            db.Execute(insertSql, insertValues);
+                            try
+                            {
+                                db.Execute(insertSql, insertValues);
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Warn($"Erro Executing update: {ex} ");
+                            }
+
+                        var jsonEntry = GetJSOnForKafka(table, insertColumnNames, insertValues, operation);
+
+                        var jsonIns = JsonConvert.SerializeObject(jsonEntry, Newtonsoft.Json.Formatting.Indented);
+                        await this.kafkaProducer.ProduceMessage(this.kafkaTopic, jsonIns);
                     }
-                    catch(Exception ex)
+                    catch (Exception ex)
                     {
                         Log.Warn($"Erro Executing insert: {ex} ");
                     }
@@ -625,7 +650,27 @@ namespace SyncChanges
                         var updateValues = change.GetValues();
                         Log.Debug($"Executing update: {updateSql} ({FormatArgs(updateValues)})");
                         if (!DryRun)
-                            db.Execute(updateSql, updateValues);
+                            try
+                            {
+                                db.Execute(updateSql, updateValues);
+                            }
+                            catch(Exception ex)
+                            {
+                                Log.Warn($"Erro Executing update: {ex} ");
+                            }
+
+                        updateValues = change.Others.Values.ToArray();
+                        var jsonEntry = GetJSOnForKafka(table, updateColumnNames, updateValues, operation);
+
+                        var updPKEntries = new Dictionary<string, object>();
+                        foreach (var ck in change.Keys)
+                        {
+                            updPKEntries.Add(ck.Key.Replace("[", "").Replace("]", ""), ck.Value);
+                        }
+                        jsonEntry["Pk"] = updPKEntries;
+
+                        var jsonUpd = JsonConvert.SerializeObject(jsonEntry, Newtonsoft.Json.Formatting.Indented);
+                        await this.kafkaProducer.ProduceMessage(this.kafkaTopic, jsonUpd);
                     }
                     catch (Exception ex)
                     {
@@ -641,7 +686,26 @@ namespace SyncChanges
                         var deleteValues = change.Keys.Values.ToArray();
                         Log.Debug($"Executing delete: {deleteSql} ({FormatArgs(deleteValues)})");
                         if (!DryRun)
-                            db.Execute(deleteSql, deleteValues);
+                            try
+                            {
+                                db.Execute(deleteSql, deleteValues);
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Warn($"Erro Executing update: {ex} ");
+                            }
+
+                        var jsonEntry = GetJSOnForKafka(table, new List<string>(), new object[] { }, operation);
+                        var updPKEntries = new Dictionary<string, object>();
+                        foreach (var ck in change.Keys)
+                        {
+                            updPKEntries.Add(ck.Key.Replace("[", "").Replace("]", ""), ck.Value);
+                        }
+                        jsonEntry["Pk"] = updPKEntries;
+
+                        var jsonDel = JsonConvert.SerializeObject(jsonEntry, Newtonsoft.Json.Formatting.Indented);
+                        await this.kafkaProducer.ProduceMessage(this.kafkaTopic, jsonDel);
+                        //Log.Info(jsonDel);
                     }
                     catch (Exception ex)
                     {
@@ -649,6 +713,49 @@ namespace SyncChanges
                     }
                     break;
             }
+        }
+
+        private static Dictionary<string, object> GetJSOnForKafka(TableInfo table, List<string> insertColumnNames, object[] insertValues, char OP)
+        {
+            // ✅ Build JSON Dictionary
+            var jsonDict = new Dictionary<string, object>();
+
+            for (int idx = 0; idx < insertColumnNames.Count(); idx++)
+            {
+                var columnName = insertColumnNames[idx].Replace("[", "").Replace("]", "");
+                var value = insertValues[idx];
+
+                // ✅ Handle Data Types Properly
+                if (value is DateTime dt)
+                {
+                    jsonDict[columnName] = dt.ToString("yyyy-MM-dd HH:mm:ss");
+                }
+                else if (value is bool)
+                {
+                    jsonDict[columnName] = value; // JSON will serialize booleans correctly
+                }
+                else if (value is Guid guid)
+                {
+                    jsonDict[columnName] = guid.ToString(); // Convert GUID to string
+                }
+                else if (value == null || string.IsNullOrEmpty(value?.ToString()))
+                {
+                    jsonDict[columnName] = null; // Properly handle NULL values
+                }
+                else
+                {
+                    jsonDict[columnName] = value;
+                }
+            }
+
+            var jsonMeta = new Dictionary<string, object>();
+            jsonMeta["TableName"] = table.Name;
+            jsonMeta["Op"] = OP;
+            jsonMeta["Data"] = jsonDict;
+
+            // ✅ Serialize Dictionary to JSON
+            //string jsonEntry = JsonConvert.SerializeObject(jsonMeta, Newtonsoft.Json.Formatting.Indented);
+            return jsonMeta;
         }
 
         private static string FormatArgs(object[] args) => string.Join(", ", args.Select((a, i) => $"@{i} = {a}"));
